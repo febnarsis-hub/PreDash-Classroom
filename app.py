@@ -1054,7 +1054,7 @@ else:
         if not password:
             st.warning('1단계 · Streamlit 앱 Settings → Secrets에 APP_PASSWORD를 설정하세요. 설정 전에는 계좌를 조회하지 않습니다.')
         if not configured:
-            st.info('2단계 · 같은 Secrets에 본인 KIS 키와 계좌번호를 입력하세요. 왼쪽 연결 설정에서 항목을 확인할 수 있습니다.')
+            st.info('2단계 · 왼쪽 '08 데이터 연결'에서 실전 조회 또는 모의투자를 선택하고 KIS 키와 계좌번호를 입력한 뒤 '연결 확인'을 누르세요.')
         if page=='오늘의 점검':render_empty_dashboard(include_market=not(password and configured))
         st.stop()
     snap=st.session_state.get('snapshot')
