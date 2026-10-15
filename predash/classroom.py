@@ -1,14 +1,30 @@
-"""Classroom credentials are held only in the current Streamlit session."""
+"""Session credentials with optional persistent Streamlit Secrets profiles."""
 import streamlit as st
 from predash.kis import KIS, BrokerError
 
 
 def account_settings(mode=None):
+    """Session overrides a complete saved profile; never mix real and demo keys."""
     settings = st.session_state.get('classroom_credentials', {})
-    selected = mode or settings.get('mode', 'demo')
-    if selected != settings.get('mode'):
-        return dict(mode=selected, key='', secret='', cano='', product='')
-    return dict(mode=selected, **{k: settings.get(k, '') for k in ('key','secret','cano','product')})
+    fields = ('key', 'secret', 'cano', 'product')
+    if settings and (mode is None or mode == settings.get('mode')):
+        return dict(mode=settings['mode'], **{k: settings.get(k, '') for k in fields})
+    try:
+        saved_mode = str(st.secrets.get('KIS_ENV', 'demo')).strip()
+        selected = mode or settings.get('mode') or saved_mode
+        empty = dict(mode=selected, **{k: '' for k in fields})
+        if st.session_state.get('classroom_saved_disabled') or selected not in ('real', 'demo'):
+            return empty
+        names = ('APP_KEY', 'APP_SECRET', 'CANO', 'ACNT_PRDT_CD')
+        prefix = 'KIS_'
+        if selected == 'demo' and any(str(st.secrets.get('KIS_DEMO_'+n, '')).strip() for n in names):
+            prefix = 'KIS_DEMO_'
+        elif selected != saved_mode:
+            return empty
+        return dict(mode=selected, **{field: str(st.secrets.get(prefix+name, '')).strip()
+                                    for field, name in zip(fields, names)})
+    except FileNotFoundError:
+        return dict(mode=mode or settings.get('mode', 'demo'), **{k: '' for k in fields})
 
 
 def connection_form():
@@ -16,15 +32,22 @@ def connection_form():
         for key in ('class_key','class_secret','class_cano','class_product'):
             st.session_state.pop(key, None)
     st.subheader('내 증권사 계좌 연결')
-    st.caption('각자 Fork한 앱에서 본인 키를 입력하세요. 현재 접속 세션에서만 사용합니다.')
-    if st.session_state.get('classroom_credentials'):
-        st.success('계좌 연결됨 · ' + ('모의투자' if account_settings()['mode']=='demo' else '실전 조회'))
+    st.caption('현재 세션에 입력하거나, 본인 앱의 Settings → Secrets에 한 번 저장해 다음 접속에도 사용하세요.')
+    settings = account_settings()
+    if all(settings[k] for k in ('key', 'secret', 'cano', 'product')):
+        source = '현재 세션' if st.session_state.get('classroom_credentials') else 'Streamlit Secrets'
+        st.success('계좌 설정 준비됨 · ' + ('모의투자' if settings['mode']=='demo' else '실전 조회') + ' · ' + source)
         if st.button('계좌 연결 해제'):
             authorized = st.session_state.get('authorized')
             st.session_state.clear()
+            st.session_state.classroom_saved_disabled = True
             if authorized: st.session_state.authorized = True
             st.rerun()
         return
+    if st.session_state.get('classroom_saved_disabled'):
+        if st.button('Secrets에 저장한 계좌 다시 사용'):
+            st.session_state.pop('classroom_saved_disabled', None)
+            st.rerun()
     with st.form('classroom_connection'):
         mode = st.radio('투자 환경', ['모의투자','실전 조회'], horizontal=True)
         key = st.text_input('App Key', type='password', key='class_key')
@@ -44,4 +67,4 @@ def connection_form():
             st.rerun()
         except BrokerError as error:
             st.error(str(error))
-    st.info('연결 해제와 로그아웃은 키·잔고·접속 중 실습 기록을 지웁니다. 필요한 기록은 먼저 백업하세요.')
+    st.info('연결 해제와 로그아웃은 세션 입력과 조회 기록을 지웁니다. Secrets에 저장한 설정은 유지되며 Settings → Secrets에서 삭제할 수 있습니다.')
