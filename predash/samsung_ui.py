@@ -25,6 +25,7 @@ def render(provider_factory, has_price_key, has_dart_key):
     selected = st.selectbox('가져올 명의자·파일', list(reports),
         format_func=lambda key: f"{reports[key]['owner']} · {reports[key]['filename']} · {reports[key]['asof']}")
     report = reports[selected]
+    st.session_state['samsung_active_report'] = selected
     st.caption('파일별·명의자별로 구분합니다. 다른 파일의 자산을 자동으로 합산하지 않습니다.')
     a, b, c = st.columns(3)
     a.metric('원본 총평가액', f"{report['totals']['value']:,.0f}원")
@@ -96,6 +97,7 @@ def render(provider_factory, has_price_key, has_dart_key):
         link['verified'] = verified.get(identity) == link['kind']+':'+link['code']
     snapshot = domestic_snapshot(report, links)
     st.subheader('확인된 국내 주식·ETF')
+    st.caption('확인한 종목은 04 내 계좌에서도 삼성증권 파일을 선택해 함께 표시할 수 있습니다.')
     if not snapshot['positions']:
         st.info('국내 주식·ETF를 분류하고 종목코드를 확인하면 통합 화면과 실적 조회에 연결됩니다.')
         st.caption('파일과 연결 정보는 현재 로그인 세션에 보관됩니다. 새 접속에서는 파일을 다시 올려주세요.')
