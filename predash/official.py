@@ -29,6 +29,10 @@ DART_ERRORS = {
 # https://dart.fss.or.kr/navi/searchNavi.do?naviCode=A002&naviCrpCik=00369657
 # Each hint must pass a live company.json stock-code check before use.
 DART_CORP_HINTS = {'012450': '00126566', '058470': '00369657'}
+# DART search for 005387 resolves the same issuer as 005380 (Hyundai Motor).
+# https://dart.fss.or.kr/dsab001/search.ax?textCrpNm=005387
+# https://dart.fss.or.kr/dsae001/selectPopup.ax?selectKey=00164742
+DART_ISSUER_STOCK_CODES = {'005387': '005380'}
 
 
 def dart_error(code):
@@ -38,7 +42,7 @@ def dart_error(code):
 def get(url, params):
     path = urlsplit(url).path
     labels = {"corpCode.xml": "DART 기업명·종목코드 목록", "document.xml": "DART 사업보고서 원문",
-              "company.json": "DART 기업개황", "fnlttSinglAcntAll.json": "DART 결산 실적", "list.json": "DART 공시 목록"}
+              "search.ax": "DART 종목별 기업 검색", "company.json": "DART 기업개황", "fnlttSinglAcntAll.json": "DART 결산 실적", "list.json": "DART 공시 목록"}
     label = labels.get(path.rsplit("/",1)[-1], "공공데이터포털 주식시세")
     for attempt in range(2):
         try:
@@ -121,15 +125,8 @@ class Official:
             return self.corps[code]
         if code in self.resolved_corps:
             return self.resolved_corps[code]
-        if code in DART_CORP_HINTS:
-            # A small, authenticated request avoids the all-company ZIP download.
-            candidate = DART_CORP_HINTS[code]
-            company = self.dart('company.json', corp_code=candidate) or {}
-            if company.get('stock_code') != code or company.get('corp_code') != candidate:
-                raise DataError('DART 기업개황의 종목코드·고유번호가 일치하지 않아 조회를 중단했습니다.')
-            self.resolved_corps[code] = candidate
-            self.names[code] = company.get('corp_name') or code
-            return candidate
+        if re.fullmatch(r'[0-9]{6}', code):
+            return self.resolve_listed_corp(code)
         if self.corps is None:
             raw = get("https://opendart.fss.or.kr/api/corpCode.xml", {"crtfc_key": self.dart_key}).content
             try:
@@ -142,6 +139,28 @@ class Official:
         if code not in self.corps:
             raise DataError("상장 종목코드를 찾지 못했습니다.")
         return self.corps[code]
+
+    def resolve_listed_corp(self, code):
+        """Resolve one listed security through DART, never through the all-company ZIP."""
+        candidate = DART_CORP_HINTS.get(code)
+        if not candidate:
+            today = date.today()
+            response = get('https://dart.fss.or.kr/dsab001/search.ax',
+                {'textCrpNm': code, 'startDate': (today-timedelta(days=90)).strftime('%Y%m%d'),
+                 'endDate': today.strftime('%Y%m%d')})
+            candidates = set(re.findall(r"openCorpInfoNew\s*\(\s*['\"]([0-9]{8})['\"]", response.text))
+            if len(candidates) != 1:
+                raise DataError('DART 종목별 검색에서 발행회사를 하나로 확인하지 못했습니다. 종목코드 또는 DART 응답을 확인하세요.')
+            candidate = candidates.pop()
+        company = self.dart('company.json', corp_code=candidate) or {}
+        issuer_stock = DART_ISSUER_STOCK_CODES.get(code, code)
+        if company.get('stock_code') != issuer_stock or company.get('corp_code') != candidate:
+            raise DataError('DART 기업개황의 종목코드·고유번호가 일치하지 않아 조회를 중단했습니다.')
+        self.resolved_corps[code] = candidate
+        # A preferred share retains its security name instead of taking the common-share name.
+        if code == issuer_stock:
+            self.names[code] = company.get('corp_name') or code
+        return candidate
 
     def search(self, query):
         if self.corps is None:
@@ -331,7 +350,8 @@ class Official:
         corp = self.corp(code)
         report = {'code': code, 'name': self.names.get(code, code),
                   'metrics': None, 'disclosures': [], 'years': [],
-                  'fetched': asof.isoformat(), 'errors': {}}
+                  'fetched': asof.isoformat(), 'errors': {},
+                  'issuer_stock_code': DART_ISSUER_STOCK_CODES.get(code, code)}
         try:
             report['metrics'] = self.latest_period_metrics(code, asof)
         except DataError as exc:

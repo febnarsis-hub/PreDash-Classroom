@@ -126,6 +126,8 @@ def render(provider_factory, has_price_key, has_dart_key):
     for code, reason in st.session_state.get(errors_key, {}).items():
         st.warning(f'{code} · {reason}')
     for code, result in financials.items():
+        if result.get('issuer_stock_code',code)!=code:
+            st.caption(code+' 우선주 실적·공시는 발행회사 기준 · 보통주 코드 '+result['issuer_stock_code'])
         for source, reason in result.get('errors', {}).items():
             st.caption(f'{code} · {source} · {reason}')
     kis = st.session_state.get('snapshot')

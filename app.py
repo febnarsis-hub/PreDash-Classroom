@@ -1078,15 +1078,25 @@ else:
         if page=='오늘의 점검':render_empty_dashboard(include_market=False)
         else:st.info('KIS 내 계좌 새로고침을 누르거나, 09에서 삼성증권 파일을 올린 뒤 위에서 선택하세요.')
         st.stop()
+    known_reports,known_errors=(evidence_for_account(st.session_state,account_files,snap)
+        if page=='내 계좌' else (st.session_state.get('reports',{}),st.session_state.get('report_errors',{})))
+    pending_dart=[p for p in snap['positions'] if p.get('asset_kind')!='ETF'
+        and p['code'] not in known_reports and p['code'] not in known_errors]
+    auto_dart=page=='내 계좌' and bool(pending_dart)
     refresh_dart=st.button('실적·공시 다시 조회', disabled=not api_key('DART_CRTFC_KEY'),
-        help='DART 실적·공시를 다시 조회합니다. 계좌 잔고 재조회와 공공데이터포털 시세 키 없이 실행합니다.')
+        help='새로 추가한 주식은 자동 조회합니다. 실패한 항목은 이 버튼으로 다시 조회하세요.')
     if not api_key('DART_CRTFC_KEY'):
         st.info('실적·공시 조회에는 DART 인증키가 필요합니다. 08 데이터 연결에서 입력하세요.')
-    elif refresh_account or refresh_dart:
+    elif refresh_account or refresh_dart or auto_dart:
         provider=official_client()
-        st.session_state.reports={}
-        st.session_state.report_errors={}
-        positions=snap['positions']
+        if refresh_account or refresh_dart:
+            st.session_state.reports={}
+            st.session_state.report_errors={}
+            positions=snap['positions']
+        else:
+            st.session_state.setdefault('reports',{})
+            st.session_state.setdefault('report_errors',{})
+            positions=pending_dart
         progress=st.progress(0,text='DART 실적·공시를 조회합니다.')
         for index,position in enumerate(positions):
             code=position['code']
@@ -1148,6 +1158,8 @@ else:
                 f"<div><small>평균 매입가 / 출처 기준 평가단가</small><b>{p['average_cost']:,.0f} / {p['price']:,.0f}원</b></div></div>"
                 f"<div class='pd-holding-foot'>손익률 {signed(health['rate'],'%')} · 영업이익 증가율 {signed(health['growth'],'%')}<br>{html.escape(health['summary'])}<br>{earnings}</div></div>")
             st.caption('잔고 출처 · '+p.get('source',holding_source))
+            if r and r.get('issuer_stock_code',p['code'])!=p['code']:
+                st.caption('우선주 실적·공시는 발행회사 기준 · 보통주 코드 '+r['issuer_stock_code'])
             for source,reason in (r or {}).get('errors',{}).items():
                 label={'metrics':'동기 실적','disclosures':'공시','annual':'연간 결산'}.get(source,source)
                 st.caption(f'{label} 조회 보류 · {reason}')
