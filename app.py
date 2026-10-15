@@ -37,6 +37,8 @@ import predash.flow as flow_module
 flow_module=importlib.reload(flow_module)
 from predash.dashboard import overview, latest_held_buy
 from predash.visuals import compact_dashboard
+from predash.portfolio import account_view, evidence_for_account
+from predash.samsung import SamsungError
 from predash.decision import comparison, brief, export_review, EvidenceError
 from predash.customs import exports, CustomsError
 from predash.krx import daily_activity, KRXError
@@ -1050,17 +1052,31 @@ else:
                 st.caption('모의투자 서버에서 제공되지 않는 시세 API는 실전용 KIS 시세 연결이 필요할 수 있습니다. 실전 키를 모의 설정에 복사하지 마세요.')
 
 
-    if not password or not configured:
+    if not password or (not configured and page!='내 계좌'):
         if not password:
             st.warning('1단계 · Streamlit 앱 Settings → Secrets에 APP_PASSWORD를 설정하세요. 설정 전에는 계좌를 조회하지 않습니다.')
         if not configured:
             st.info('2단계 · 왼쪽 08 데이터 연결에서 실전 조회 또는 모의투자를 선택하고 KIS 키와 계좌번호를 입력한 뒤 연결 확인을 누르세요.')
         if page=='오늘의 점검':render_empty_dashboard(include_market=not(password and configured))
         st.stop()
-    snap=st.session_state.get('snapshot')
+    account_files=[]
+    if page=='내 계좌':
+        uploaded=st.session_state.get('samsung_files',{})
+        if uploaded:
+            active=st.session_state.get('samsung_active_report',next(iter(uploaded)))
+            default=[active] if active in uploaded and (st.session_state.get('snapshot') or {}).get('mode','real')=='real' else []
+            account_files=st.multiselect('함께 표시할 삼성증권 파일',list(uploaded),default=default,
+                format_func=lambda key:f"{uploaded[key]['owner']} · {uploaded[key]['filename']} · {uploaded[key]['asof']}",
+                key='account_samsung_files')
+            st.caption('선택한 파일에서 코드가 확인된 국내 주식·ETF를 KIS와 합산합니다. 다른 명의자 파일은 직접 선택한 경우에만 포함됩니다.')
+        else:st.caption('삼성증권 잔고는 09 메뉴에서 파일을 올리고 종목코드를 확인하면 여기에도 표시됩니다.')
+    try:
+        snap=account_view(st.session_state,account_files) if page=='내 계좌' else st.session_state.get('snapshot')
+    except SamsungError as exc:
+        st.warning(str(exc));st.stop()
     if not snap:
         if page=='오늘의 점검':render_empty_dashboard(include_market=False)
-        else:st.info('내 계좌 불러와 점검하기를 누르면 실제 보유종목이 표시됩니다.')
+        else:st.info('KIS 내 계좌 새로고침을 누르거나, 09에서 삼성증권 파일을 올린 뒤 위에서 선택하세요.')
         st.stop()
     refresh_dart=st.button('실적·공시 다시 조회', disabled=not api_key('DART_CRTFC_KEY'),
         help='DART 실적·공시를 다시 조회합니다. 계좌 잔고 재조회와 공공데이터포털 시세 키 없이 실행합니다.')
@@ -1075,6 +1091,8 @@ else:
         for index,position in enumerate(positions):
             code=position['code']
             try:
+                if position.get('asset_kind')=='ETF':
+                    continue
                 if not code.isdigit() or len(code)!=6:
                     raise DataError('기업 분석 대상이 아닌 상품입니다.')
                 st.session_state.reports[code]=provider.holding_report(code,
@@ -1086,10 +1104,13 @@ else:
             progress.progress((index+1)/len(positions),text=f'DART 자료 확인 {index+1}/{len(positions)}')
         progress.empty()
     st.caption(f"{'실전' if snap['mode']=='real' else '모의'} 계좌 · 조회 {snap['fetched']}")
+    holding_source=snap.get('source_label','한국투자증권 조회 기준')
     pnl_color='pd-plus' if snap['pnl']>0 else 'pd-minus' if snap['pnl']<0 else ''
-    st.html(f"<div class='pd-summary'><div><span>국내주식 평가액</span><strong>{snap['value']:,.0f}원</strong><small>한국투자증권 조회 기준</small></div><div><span>증권사 평가손익</span><strong class='{pnl_color}'>{snap['pnl']:+,.0f}원</strong><small>한국투자증권 조회 기준</small></div><div><span>보유종목</span><strong>{len(snap['positions'])}개</strong><small>국내주식 잔고</small></div></div>")
+    st.html(f"<div class='pd-summary'><div><span>국내주식 평가액</span><strong>{snap['value']:,.0f}원</strong><small>{holding_source}</small></div><div><span>증권사 평가손익</span><strong class='{pnl_color}'>{snap['pnl']:+,.0f}원</strong><small>{holding_source}</small></div><div><span>보유종목</span><strong>{len(snap['positions'])}개</strong><small>국내주식 잔고</small></div></div>")
     reports=st.session_state.get('reports',{})
     errors=st.session_state.get('report_errors',{})
+    if page=='내 계좌':
+        reports,errors=evidence_for_account(st.session_state,account_files,snap)
     if not reports and page=='내 계좌':
         st.info('공식 자료 연결 시 재무·공시를 함께 확인할 수 있습니다.')
     if page=='내 계좌':
@@ -1110,26 +1131,30 @@ else:
         shown=[p for p in sorted(snap['positions'],key=lambda x:-x['weight']) if filters[selected_filter](statuses[p['code']])]
         if not shown:st.info('선택한 상태에 해당하는 종목이 없습니다.')
         for p in shown:
-            health=statuses[p['code']]
+            health=dict(statuses[p['code']])
+            if p.get('asset_kind')=='ETF':
+                health['summary']=health['summary'].replace(health['earnings'],'ETF · 기업 실적 조회 제외')
             chips=[health['price'],health['earnings']]+([health['events'][0]['label']] if health['events'] else ['최근 30일 조회 공시 없음' if reports.get(p['code']) and not reports[p['code']].get('errors',{}).get('disclosures') else '공시 조회 보류'])
+            if p.get('asset_kind')=='ETF':chips=[health['price'],'ETF · 기업 실적 조회 제외']
             st.html("<div class='pd-badges'>"+''.join("<span class='pd-badge' style='border-left:4px solid "+('#b63f3f' if '손실' in label or '감소' in label or '적자' in label or '공급' in label else '#214b3a' if '수익' in label or '증가' in label or '급증' in label or '흑자' in label else '#a68137')+"'>"+html.escape(label)+"</span>" for label in chips)+"</div>")
 
             r=reports.get(p['code'])
             m=(r or {}).get('metrics')
-            earnings='최근 분기 누적 자료 보류'
+            earnings='ETF · 기업 동기 실적 조회 대상 아님' if p.get('asset_kind')=='ETF' else '최근 분기 누적 자료 보류'
             if m:
                 earnings=f"{m['year']}년 1~{m['quarter']}분기 누적 · 영업이익 {m['profit']:,.1f}억 · 전년 동기 {m['prior_profit']:,.1f}억 · {m['basis']}" if m['prior_profit'] is not None else '전년 동기 비교 자료 부족'
             st.html(f"<div class='pd-holding'><div class='pd-holding-head'><div><span class='pd-watch-name'>{html.escape(str(p['name']))}</span><small>{html.escape(str(p['code']))} · {p['quantity']:g}주 · 비중 {p['weight']:.1f}%</small></div>"
                 f"<div><small>평가액</small><b>{p['value']:,.0f}원</b></div><div><small>평가손익</small>{signed(int(p['pnl']),'원')}</div>"
-                f"<div><small>평균 매입가 / 현재가</small><b>{p['average_cost']:,.0f} / {p['price']:,.0f}원</b></div></div>"
+                f"<div><small>평균 매입가 / 출처 기준 평가단가</small><b>{p['average_cost']:,.0f} / {p['price']:,.0f}원</b></div></div>"
                 f"<div class='pd-holding-foot'>손익률 {signed(health['rate'],'%')} · 영업이익 증가율 {signed(health['growth'],'%')}<br>{html.escape(health['summary'])}<br>{earnings}</div></div>")
+            st.caption('잔고 출처 · '+p.get('source',holding_source))
             for source,reason in (r or {}).get('errors',{}).items():
                 label={'metrics':'동기 실적','disclosures':'공시','annual':'연간 결산'}.get(source,source)
                 st.caption(f'{label} 조회 보류 · {reason}')
             if p['code'] in errors:st.warning('DART 조회 보류 · '+errors[p['code']])
             with st.expander(f"{p['name']} · 재무·공시 근거"):
-                st.caption(f"한국투자증권 잔고 {snap['fetched']} · 평가액 대비 비중 · 주문 기능 없음")
-                if st.button('종목·시장 1·5·20일 성과 조회',key='holding_relative_'+p['code']):
+                st.caption(f"{p.get('source',holding_source)} · {snap['fetched']} · 평가액 대비 비중 · 주문 기능 없음")
+                if st.button('종목·시장 1·5·20일 성과 조회',key='holding_relative_'+p['code'],disabled=p.get('asset_kind')=='ETF'):
                     st.session_state['holding_evidence_'+p['code']]=watch_fetch(p['code'],official_client(),today)
                 held=st.session_state.get('holding_evidence_'+p['code'])
                 if held:stock_evidence_charts(held)
@@ -1142,7 +1167,7 @@ else:
                     st.caption('공시 제목 기반 분류 · 계약 정정·해지 및 지분변동 방향은 원문 확인 필요. 내부자 매수로 단정하지 않습니다.')
                     if not r.get('disclosures') and not r.get('errors',{}).get('disclosures'):st.write('최근 30일 접수된 공시가 없습니다.')
                 elif p['code'] in errors:st.warning('기업 분석 보류 · '+errors[p['code']])
-        st.caption('조회 시점의 증권사 응답 기준입니다. 증권사 앱과 종목 수·수량·평가액을 대조하세요.')
+        st.caption('KIS는 마지막 잔고 조회 시점, 삼성증권은 파일 기준일의 금액입니다. 삼성 파일 가격·수량은 자동 갱신되지 않으며, 각 증권사 잔고와 대조하세요.')
     else:
         st.html(compact_dashboard(snap,reports,st.session_state.get('home_price'),st.session_state.get('home_price_reason','체결 조회 후 표시')))
         with st.expander('상세 분석 · 계산 기준 · 확인 순서',expanded=False):
