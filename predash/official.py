@@ -303,6 +303,45 @@ class Official:
         except (zipfile.BadZipFile, KeyError):
             return ""
 
+    def holding_report(self, code, asof=None):
+        """Fetch independent DART evidence without requiring a price or full valuation."""
+        asof = asof or date.today()
+        if not self.dart_key:
+            raise DataError('DART 인증키가 없습니다. 08 데이터 연결에서 DART 키를 확인하세요.')
+        corp = self.corp(code)
+        report = {'code': code, 'name': self.names.get(code, code),
+                  'metrics': None, 'disclosures': [], 'years': [],
+                  'fetched': asof.isoformat(), 'errors': {}}
+        try:
+            report['metrics'] = self.latest_period_metrics(code, asof)
+        except DataError as exc:
+            report['errors']['metrics'] = str(exc)
+        try:
+            notices = self.dart('list.json', corp_code=corp,
+                bgn_de=(asof-timedelta(days=30)).strftime('%Y%m%d'),
+                end_de=asof.strftime('%Y%m%d'), page_count=100)
+            report['disclosures'] = [
+                {'date': row['rcept_dt'], 'title': row['report_nm'],
+                 'url': 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo='+row['rcept_no']}
+                for row in (notices or {}).get('list', [])]
+        except DataError as exc:
+            report['errors']['disclosures'] = str(exc)
+        # Annual charts are optional; missing years must not discard interim evidence.
+        try:
+            for basis in ('CFS', 'OFS'):
+                years = [self.annual(corp, year, basis)
+                         for year in range(asof.year-3, asof.year)]
+                available = [year for year in years if year]
+                if len(available) >= 2:
+                    report['years'] = available
+                    report['basis'] = basis
+                    break
+            if not report['years']:
+                report['errors']['annual'] = '동일 회계 기준으로 비교할 결산 자료가 부족합니다.'
+        except DataError as exc:
+            report['errors']['annual'] = str(exc)
+        return report
+
     def automatic(self, code):
         # Each purchaser reads their own provider keys. Never load a shared public cache.
         return self._automatic_direct(code)
@@ -404,4 +443,3 @@ def demo():
             "years": [{"year": 2023, "revenue": 10000, "profit": 1100, "url": ""},
                       {"year": 2024, "revenue": 12500, "profit": 1600, "url": ""},
                       {"year": 2025, "revenue": 15000, "profit": 2100, "url": ""}]}
-
