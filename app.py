@@ -983,20 +983,6 @@ else:
                             '매수 전 20거래일의 검증 가능한 시세가 부족해 비교를 보류합니다.')
                 except (BrokerError,TradeDataError,KeyError,ValueError):
                     st.session_state.home_price_reason='체결 또는 과거 시세 자료가 부족해 가격 위치를 보류합니다.'
-            if api_key('DART_CRTFC_KEY') and api_key('DATA_GO_KR_SERVICE_KEY'):
-                provider=official_client()
-                progress=st.progress(0,text='보유종목의 공식 자료를 조회합니다.')
-                for index,position in enumerate(snapshot['positions']):
-                    try:
-                        if not position['code'].isdigit() or len(position['code']) != 6:
-                            raise DataError('기업 분석 대상이 아닌 상품입니다.')
-                        st.session_state.reports[position['code']]=provider.automatic(position['code'])
-                    except DataError as exc:
-                        st.session_state.report_errors[position['code']]=str(exc)
-                    except Exception:
-                        st.session_state.report_errors[position['code']]='제공기관 응답을 확인하지 못했습니다. 나중에 다시 조회하세요.'
-                    progress.progress((index+1)/len(snapshot['positions']),text=f"공식 자료 확인 {index+1}/{len(snapshot['positions'])}")
-                progress.empty()
         except BrokerError as exc:
             st.error(str(exc))
             st.caption('이전 조회 결과가 있으면 그대로 유지합니다.')
@@ -1062,6 +1048,29 @@ else:
         if page=='오늘의 점검':render_empty_dashboard(include_market=False)
         else:st.info('내 계좌 불러와 점검하기를 누르면 실제 보유종목이 표시됩니다.')
         st.stop()
+    refresh_dart=st.button('실적·공시 다시 조회', disabled=not api_key('DART_CRTFC_KEY'),
+        help='DART 실적·공시를 다시 조회합니다. 계좌 잔고 재조회와 공공데이터포털 시세 키 없이 실행합니다.')
+    if not api_key('DART_CRTFC_KEY'):
+        st.info('실적·공시 조회에는 DART 인증키가 필요합니다. 08 데이터 연결에서 입력하세요.')
+    elif refresh_account or refresh_dart:
+        provider=official_client()
+        st.session_state.reports={}
+        st.session_state.report_errors={}
+        positions=snap['positions']
+        progress=st.progress(0,text='DART 실적·공시를 조회합니다.')
+        for index,position in enumerate(positions):
+            code=position['code']
+            try:
+                if not code.isdigit() or len(code)!=6:
+                    raise DataError('기업 분석 대상이 아닌 상품입니다.')
+                st.session_state.reports[code]=provider.holding_report(code,
+                    datetime.now(ZoneInfo('Asia/Seoul')).date())
+            except DataError as exc:
+                st.session_state.report_errors[code]=str(exc)
+            except Exception:
+                st.session_state.report_errors[code]='제공기관 응답 형식을 확인하지 못했습니다. 다시 조회하세요.'
+            progress.progress((index+1)/len(positions),text=f'DART 자료 확인 {index+1}/{len(positions)}')
+        progress.empty()
     st.caption(f"{'실전' if snap['mode']=='real' else '모의'} 계좌 · 조회 {snap['fetched']}")
     pnl_color='pd-plus' if snap['pnl']>0 else 'pd-minus' if snap['pnl']<0 else ''
     st.html(f"<div class='pd-summary'><div><span>국내주식 평가액</span><strong>{snap['value']:,.0f}원</strong><small>한국투자증권 조회 기준</small></div><div><span>증권사 평가손익</span><strong class='{pnl_color}'>{snap['pnl']:+,.0f}원</strong><small>한국투자증권 조회 기준</small></div><div><span>보유종목</span><strong>{len(snap['positions'])}개</strong><small>국내주식 잔고</small></div></div>")
@@ -1088,7 +1097,7 @@ else:
         if not shown:st.info('선택한 상태에 해당하는 종목이 없습니다.')
         for p in shown:
             health=statuses[p['code']]
-            chips=[health['price'],health['earnings']]+([health['events'][0]['label']] if health['events'] else ['최근 30일 조회 공시 없음' if reports.get(p['code']) else '공시 조회 보류'])
+            chips=[health['price'],health['earnings']]+([health['events'][0]['label']] if health['events'] else ['최근 30일 조회 공시 없음' if reports.get(p['code']) and not reports[p['code']].get('errors',{}).get('disclosures') else '공시 조회 보류'])
             st.html("<div class='pd-badges'>"+''.join("<span class='pd-badge' style='border-left:4px solid "+('#b63f3f' if '손실' in label or '감소' in label or '적자' in label or '공급' in label else '#214b3a' if '수익' in label or '증가' in label or '급증' in label or '흑자' in label else '#a68137')+"'>"+html.escape(label)+"</span>" for label in chips)+"</div>")
 
             r=reports.get(p['code'])
@@ -1100,6 +1109,10 @@ else:
                 f"<div><small>평가액</small><b>{p['value']:,.0f}원</b></div><div><small>평가손익</small>{signed(int(p['pnl']),'원')}</div>"
                 f"<div><small>평균 매입가 / 현재가</small><b>{p['average_cost']:,.0f} / {p['price']:,.0f}원</b></div></div>"
                 f"<div class='pd-holding-foot'>손익률 {signed(health['rate'],'%')} · 영업이익 증가율 {signed(health['growth'],'%')}<br>{html.escape(health['summary'])}<br>{earnings}</div></div>")
+            for source,reason in (r or {}).get('errors',{}).items():
+                label={'metrics':'동기 실적','disclosures':'공시','annual':'연간 결산'}.get(source,source)
+                st.caption(f'{label} 조회 보류 · {reason}')
+            if p['code'] in errors:st.warning('DART 조회 보류 · '+errors[p['code']])
             with st.expander(f"{p['name']} · 재무·공시 근거"):
                 st.caption(f"한국투자증권 잔고 {snap['fetched']} · 평가액 대비 비중 · 주문 기능 없음")
                 if st.button('종목·시장 1·5·20일 성과 조회',key='holding_relative_'+p['code']):
@@ -1109,11 +1122,11 @@ else:
 
                 if r:
                     financial_comparison(r.get('metrics'))
-                    st.caption(f"공공데이터포털 종가 기준일 {r.get('price_date','미확인')} · DART 조회일 {r.get('fetched','미확인')}")
+                    st.caption(f"DART 조회일 {r.get('fetched','미확인')} · 공시는 최근 30일 접수 기준")
                     for d in health['events']:
                         st.link_button(f"{d['label']} · {d['date']} · {d['title']}",d['url'])
                     st.caption('공시 제목 기반 분류 · 계약 정정·해지 및 지분변동 방향은 원문 확인 필요. 내부자 매수로 단정하지 않습니다.')
-                    if not r.get('disclosures'):st.write('조회된 공시가 없습니다.')
+                    if not r.get('disclosures') and not r.get('errors',{}).get('disclosures'):st.write('최근 30일 접수된 공시가 없습니다.')
                 elif p['code'] in errors:st.warning('기업 분석 보류 · '+errors[p['code']])
         st.caption('조회 시점의 증권사 응답 기준입니다. 증권사 앱과 종목 수·수량·평가액을 대조하세요.')
     else:
