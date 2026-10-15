@@ -148,7 +148,7 @@ class Official:
         for days in range(10):
             target = (date.today()-timedelta(days=days)).strftime("%Y%m%d")
             try:
-                response = get("https://apis.data.go.kr/1160100/service/GetStockSecuritiesInfoService/getStockPriceInfo", {**params,"basDt":target}).json()["response"]
+                response = get("https://apis.data.go.kr/1160100/GetStockSecuritiesInfoService_V2/getStockPriceInfo_V2", {**params,"basDt":target}).json()["response"]
                 if str(response["header"].get("resultCode")) not in ("00","0"):
                     raise DataError("공공데이터포털 종목 검색: 시세 서비스 승인과 인증키를 확인하세요.")
                 items = (response.get("body",{}).get("items") or {}).get("item",[])
@@ -170,7 +170,7 @@ class Official:
         for days in range(10):
             target = (asof - timedelta(days=days)).strftime("%Y%m%d")
             try:
-                payload = get("https://apis.data.go.kr/1160100/service/GetStockSecuritiesInfoService/getStockPriceInfo",
+                payload = get("https://apis.data.go.kr/1160100/GetStockSecuritiesInfoService_V2/getStockPriceInfo_V2",
                     {"serviceKey": self.price_key, "resultType": "json", "numOfRows": 100,
                      "basDt": target, "likeSrtnCd": code}).json()
                 response = payload["response"]
@@ -197,7 +197,7 @@ class Official:
                 "likeSrtnCd":code,"beginBasDt":(asof-timedelta(days=50)).strftime('%Y%m%d'),
                 "endBasDt":(asof+timedelta(days=1)).strftime('%Y%m%d')}
         try:
-            response=get("https://apis.data.go.kr/1160100/service/GetStockSecuritiesInfoService/getStockPriceInfo",params).json()["response"]
+            response=get("https://apis.data.go.kr/1160100/GetStockSecuritiesInfoService_V2/getStockPriceInfo_V2",params).json()["response"]
             if str(response['header'].get('resultCode')) not in ('00','0'):
                 raise DataError("공공데이터포털 일별 시세 승인·인증 오류")
             items=(response.get('body',{}).get('items') or {}).get('item',[])
