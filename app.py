@@ -779,7 +779,7 @@ elif page=='투자 근거':
     st.stop()
 elif page=='연결 설정':
     st.title('API 연결 설정')
-    st.html('<div class="pd-intro">필요한 데이터만 연결하세요. 입력한 API 키는 화면에 다시 표시하지 않으며, 세션 입력값은 로그아웃하면 사라집니다.</div>')
+    st.html('<div class="pd-intro">키를 계속 사용하려면 본인 앱의 Settings → Secrets에 한 번 저장하세요. 아래 입력폼은 임시 세션용입니다.</div>')
 
     if not password:
         st.warning('먼저 Streamlit 앱 Settings → Secrets에 APP_PASSWORD를 설정하세요. 앱 로그인용 비밀번호만 Secrets에 필수로 둡니다.')
@@ -795,7 +795,7 @@ elif page=='연결 설정':
 
     connected=sum(bool(api_key(key)) for _,_,key,_,_ in api_specs)
     kis_connected=all(account_settings()[k] for k in ('key','secret','cano','product'))
-    st.html(f"<div class='pd-summary'><div><span>공공 API</span><strong>{connected}/4</strong><small>필요한 항목만 연결</small></div><div><span>증권사 KIS</span><strong>{'연결됨' if kis_connected else '미연결'}</strong><small>현재 세션 전용</small></div><div><span>저장 방식</span><strong>세션 보호</strong><small>로그아웃 시 입력 키 삭제</small></div></div>")
+    st.html(f"<div class='pd-summary'><div><span>공공 API</span><strong>{connected}/4</strong><small>필요한 항목만 연결</small></div><div><span>증권사 KIS</span><strong>{'연결됨' if kis_connected else '미연결'}</strong><small>세션 또는 Streamlit Secrets</small></div><div><span>영구 저장</span><strong>Secrets</strong><small>Settings → Secrets → Save</small></div></div>")
 
     st.subheader('01 · 공공 데이터 API')
     st.caption('수강 중에는 아래에서 바로 입력할 수 있습니다. 장기 사용은 본인 Streamlit Secrets에 저장하면 매번 다시 입력할 필요가 없습니다.')
@@ -837,17 +837,24 @@ elif page=='연결 설정':
             for _,_,key,_,_ in api_specs:st.session_state.pop('api_input_'+key,None)
             st.rerun()
 
-    with st.expander('Streamlit Secrets에 영구 설정하기'):
-        st.caption('본인 Fork 앱에서만 사용하세요. GitHub 코드나 게시판에는 API 키를 올리지 않습니다.')
+    with st.expander('모든 키를 한 번만 입력 · 영구 저장 안내',expanded=True):
+        st.write('오른쪽 아래 앱 관리 → 메뉴(⋮) → Settings → Secrets에 아래 항목을 입력하고 Save 하세요. 기존 APP_PASSWORD는 유지하세요.')
+        st.caption('이 입력폼의 적용 버튼은 영구 저장이 아닙니다. 실제 키는 Secrets에만 입력하고 기존 같은 이름의 항목은 수정하세요. 계좌번호는 앞자리 0을 유지하도록 따옴표 안에 작성합니다.')
         st.code('''DART_CRTFC_KEY = "내 DART 키"
 DATA_GO_KR_SERVICE_KEY = "내 공공데이터 키"
 KRX_AUTH_KEY = "내 KRX 키"
-CUSTOMS_API_KEY = "내 관세청 키"''',language='toml')
-        st.write('Streamlit Community Cloud → 해당 앱 → Settings → Secrets에 붙여 넣고 Save 합니다.')
+CUSTOMS_API_KEY = "내 관세청 키"
+
+KIS_ENV = "real"
+KIS_APP_KEY = "내 KIS App Key"
+KIS_APP_SECRET = "내 KIS App Secret"
+KIS_CANO = "계좌번호 앞 8자리"
+KIS_ACNT_PRDT_CD = "계좌번호 뒤 2자리"''',language='toml')
+        st.write('실전 조회는 KIS_ENV를 real, 모의투자는 demo로 설정하고 그 환경에서 발급한 키와 계좌를 사용하세요. 저장 후 다시 접속하면 공공 API와 KIS 설정을 불러옵니다.')
 
     st.divider()
     st.subheader('02 · 한국투자증권 계좌')
-    st.caption('증권사 App Key·Secret·계좌번호는 Streamlit Secrets에 저장하지 않고 현재 접속 세션에서만 사용합니다.')
+    st.caption('KIS도 본인 Streamlit Secrets에 저장하면 새로고침 후 다시 입력하지 않아도 됩니다. 아래 임시 입력값이 있으면 해당 세션에서는 임시 설정을 우선 사용합니다.')
     connection_form()
     if kis_connected:
         st.caption(f"현재 KIS 설정 · {'실전 조회' if account_settings()['mode']=='real' else '모의투자'} · 키와 계좌번호 원문은 표시하지 않습니다.")
@@ -863,7 +870,7 @@ CUSTOMS_API_KEY = "내 관세청 키"''',language='toml')
     st.link_button('한국투자증권 API 신청','https://apiportal.koreainvestment.com/',use_container_width=True)
 
     st.info('권장 순서 · 공공데이터 → DART → KIS → 필요할 때 KRX·관세청. 모든 API를 한 번에 준비할 필요는 없습니다.')
-    st.caption('세션 입력 API 키와 KIS 정보는 로그아웃 시 함께 삭제됩니다. 장기 사용이 필요한 공공 API만 본인의 Streamlit Secrets에 저장하세요.')
+    st.caption('로그아웃하면 세션 입력값과 조회 기록은 삭제됩니다. Secrets에 저장한 키는 유지되며 다음 로그인에서 다시 불러옵니다.')
 elif page=='매매 습관':
     st.title('매매 습관')
     mode_label=st.radio('분석할 계좌',['실전 계좌','KIS 모의계좌'],horizontal=True,
