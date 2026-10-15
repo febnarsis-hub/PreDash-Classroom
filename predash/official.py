@@ -24,6 +24,12 @@ DART_ERRORS = {
     "901": "DART 계정의 개인정보 보유기간이 만료됐습니다. DART에서 계정을 확인하세요.",
 }
 
+# Public identifiers from DART's company navigation, checked 2026-10-16.
+# https://dart.fss.or.kr/navi/searchNavi.do?naviCode=A002&naviCrpCik=00126566
+# https://dart.fss.or.kr/navi/searchNavi.do?naviCode=A002&naviCrpCik=00369657
+# Each hint must pass a live company.json stock-code check before use.
+DART_CORP_HINTS = {'012450': '00126566', '058470': '00369657'}
+
 
 def dart_error(code):
     return DART_ERRORS.get(str(code), "DART가 정상 데이터를 반환하지 않았습니다. 승인 상태와 조회 조건을 확인하세요.")
@@ -93,6 +99,7 @@ class Official:
         raw_price_key = price_key if price_key is not None else os.getenv("DATA_GO_KR_SERVICE_KEY", "")
         self.price_key = unquote(str(raw_price_key).strip())
         self.corps = None
+        self.resolved_corps = {}
         self.names = {}
         self.price_rows = {}
         self.annual_cache = {}
@@ -110,6 +117,19 @@ class Official:
         return payload
 
     def corp(self, code):
+        if self.corps is not None and code in self.corps:
+            return self.corps[code]
+        if code in self.resolved_corps:
+            return self.resolved_corps[code]
+        if code in DART_CORP_HINTS:
+            # A small, authenticated request avoids the all-company ZIP download.
+            candidate = DART_CORP_HINTS[code]
+            company = self.dart('company.json', corp_code=candidate) or {}
+            if company.get('stock_code') != code or company.get('corp_code') != candidate:
+                raise DataError('DART 기업개황의 종목코드·고유번호가 일치하지 않아 조회를 중단했습니다.')
+            self.resolved_corps[code] = candidate
+            self.names[code] = company.get('corp_name') or code
+            return candidate
         if self.corps is None:
             raw = get("https://opendart.fss.or.kr/api/corpCode.xml", {"crtfc_key": self.dart_key}).content
             try:

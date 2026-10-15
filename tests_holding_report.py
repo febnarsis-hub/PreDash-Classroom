@@ -2,7 +2,7 @@ import sys
 import types
 import unittest
 from datetime import date
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 try:
     import requests
@@ -70,6 +70,45 @@ class HoldingReportTests(unittest.TestCase):
         result = provider.holding_report('005930', date(2026, 10, 16))
         self.assertEqual(result['basis'], 'OFS')
         self.assertEqual([row['year'] for row in result['years']], [2023, 2024, 2025])
+
+
+class CorporateResolutionTests(unittest.TestCase):
+    def test_held_companies_resolve_without_directory_download_and_are_cached(self):
+        for code, corp, name in [('012450', '00126566', '한화에어로스페이스'),
+                                 ('058470', '00369657', '리노공업')]:
+            with self.subTest(code=code):
+                provider = Official(dart_key='test-key')
+                provider.dart = Mock(return_value={'corp_code': corp, 'stock_code': code,
+                                                  'corp_name': name})
+                with patch('predash.official.get', side_effect=AssertionError('전체 목록 다운로드 금지')):
+                    self.assertEqual(provider.corp(code), corp)
+                    self.assertEqual(provider.corp(code), corp)
+                provider.dart.assert_called_once_with('company.json', corp_code=corp)
+                self.assertEqual(provider.names[code], name)
+                self.assertIsNone(provider.corps)
+
+    def test_mismatched_or_missing_identity_never_uses_the_hint(self):
+        for company in [{'corp_code': '00126566', 'stock_code': '005930'},
+                        {'corp_code': '99999999', 'stock_code': '012450'}, {}]:
+            provider = Official(dart_key='test-key')
+            provider.dart = Mock(return_value=company)
+            with self.assertRaisesRegex(DataError, '일치하지 않아'):
+                provider.corp('012450')
+            self.assertEqual(provider.resolved_corps, {})
+
+    def test_authentication_failure_is_not_bypassed(self):
+        provider = Official(dart_key='test-key')
+        provider.dart = Mock(side_effect=DataError('등록되지 않은 DART 키'))
+        with self.assertRaisesRegex(DataError, '등록되지 않은 DART 키'):
+            provider.corp('058470')
+        self.assertEqual(provider.resolved_corps, {})
+
+    def test_full_directory_remains_authoritative(self):
+        provider = Official(dart_key='test-key')
+        provider.corps = {'012450': '12345678', '005930': '00126380'}
+        provider.dart = Mock(side_effect=AssertionError('추가 조회 불필요'))
+        self.assertEqual(provider.corp('012450'), '12345678')
+        self.assertEqual(provider.corp('005930'), '00126380')
 
 
 if __name__ == '__main__':
