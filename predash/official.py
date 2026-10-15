@@ -2,7 +2,9 @@ import io
 import os
 import re
 import html
+import json
 import zipfile
+from pathlib import Path
 from datetime import date, timedelta
 from xml.etree import ElementTree
 from urllib.parse import unquote, urlsplit
@@ -33,6 +35,10 @@ DART_CORP_HINTS = {'012450': '00126566', '058470': '00369657'}
 # https://dart.fss.or.kr/dsab001/search.ax?textCrpNm=005387
 # https://dart.fss.or.kr/dsae001/selectPopup.ax?selectKey=00164742
 DART_ISSUER_STOCK_CODES = {'005387': '005380'}
+_REGISTERED_COMPANIES = json.loads(Path(__file__).with_name('dart_companies.json').read_text(encoding='utf-8'))
+DART_CORP_HINTS.update({code: item['corp_code'] for code, item in _REGISTERED_COMPANIES.items()})
+DART_ISSUER_STOCK_CODES.update({code: item['issuer_stock_code'] for code, item in _REGISTERED_COMPANIES.items()
+                               if item['issuer_stock_code'] != code})
 
 
 def dart_error(code):
@@ -46,7 +52,8 @@ def get(url, params):
     label = labels.get(path.rsplit("/",1)[-1], "공공데이터포털 주식시세")
     for attempt in range(2):
         try:
-            r = requests.get(url, params=params, timeout=(10,60) if path.endswith(("corpCode.xml","document.xml")) else (10,30))
+            r = requests.get(url, params=params, timeout=(5,8) if path.endswith('search.ax') else
+                             (10,60) if path.endswith(("corpCode.xml","document.xml")) else (10,30))
             if r.status_code in (502,503,504) and attempt == 0:
                 continue
             status = r.status_code
@@ -107,6 +114,41 @@ class Official:
         self.names = {}
         self.price_rows = {}
         self.annual_cache = {}
+        self.dart_probe_done = False
+        self.dart_probe_error = ''
+
+    def check_dart_connection(self):
+        """One bounded authenticated probe per refresh, including failure caching."""
+        if self.dart_probe_done:
+            if self.dart_probe_error:
+                raise DataError(self.dart_probe_error)
+            return
+        self.dart_probe_done = True
+        try:
+            try:
+                response = requests.get('https://opendart.fss.or.kr/api/company.json',
+                    params={'crtfc_key': self.dart_key, 'corp_code': '00126380'}, timeout=(5,8))
+            except requests.Timeout:
+                raise DataError('DART 소량 API 접속 진단: 현재 앱 서버에서 기업개황 API 응답을 받지 못했습니다 (연결 5초/응답 8초 제한). 인증키 오류로 확정할 수 없습니다.') from None
+            except requests.RequestException:
+                raise DataError('DART 소량 API 접속 진단: 현재 앱 서버와 OpenDART 사이의 네트워크 연결에 실패했습니다.') from None
+            if response.status_code != 200:
+                raise DataError(f'DART 소량 API 접속 진단: HTTP {response.status_code}. 앱 서버의 OpenDART 접근 상태를 확인하세요.')
+            try:
+                company = response.json()
+            except ValueError:
+                raise DataError('DART 소량 API 접속 진단: 응답이 정상 JSON이 아닙니다.') from None
+            if not isinstance(company, dict):
+                raise DataError('DART 소량 API 접속 진단: 기업개황 응답 형식이 올바르지 않습니다.')
+            if company.get('status') != '000':
+                raise DataError('DART 소량 API 접속 진단: '+dart_error(company.get('status')))
+            if company.get('corp_code') != '00126380' or company.get('stock_code') != '005930':
+                raise DataError('DART 소량 API 접속 진단: 기업 식별 결과가 일치하지 않습니다.')
+            self.resolved_corps['005930'] = '00126380'
+            self.names['005930'] = company.get('corp_name') or '삼성전자'
+        except DataError as exc:
+            self.dart_probe_error = str(exc)
+            raise
 
     def dart(self, endpoint, **params):
         try:
@@ -347,6 +389,7 @@ class Official:
         asof = asof or date.today()
         if not self.dart_key:
             raise DataError('DART 인증키가 없습니다. 08 데이터 연결에서 DART 키를 확인하세요.')
+        self.check_dart_connection()
         corp = self.corp(code)
         report = {'code': code, 'name': self.names.get(code, code),
                   'metrics': None, 'disclosures': [], 'years': [],
