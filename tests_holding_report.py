@@ -15,6 +15,7 @@ from predash.official import Official, DataError
 class HoldingReportTests(unittest.TestCase):
     def provider(self):
         provider = Official(dart_key='test-key', price_key='')
+        provider.check_dart_connection = Mock()
         provider.corp = Mock(return_value='00126380')
         provider.names = {'005930': '삼성전자'}
         provider.latest_period_metrics = Mock(return_value={'profit': 30, 'prior_profit': 20})
